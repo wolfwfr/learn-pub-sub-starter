@@ -43,7 +43,9 @@ func DeclareAndBind(
 	}
 	isDurable := queueType == Durable
 	isTransient := queueType == Transient
-	queue, err := ch.QueueDeclare(queueName, isDurable, isTransient, isTransient, false, nil)
+	queue, err := ch.QueueDeclare(queueName, isDurable, isTransient, isTransient, false, amqp.Table{
+		"x-dead-letter-exchange": "peril_dlx",
+	})
 	if err != nil {
 		return nil, amqp.Queue{}, fmt.Errorf("creating queue")
 	}
@@ -51,13 +53,21 @@ func DeclareAndBind(
 	return ch, queue, nil
 }
 
+type AckType string
+
+const (
+	Ack         AckType = "ack"
+	NackReque   AckType = "nackReque"
+	NackDiscard AckType = "nackDiscard"
+)
+
 func SubscribeJSON[T any](
 	conn *amqp.Connection,
 	exchange,
 	queueName,
 	key string,
 	queueType SimpleQueueType, // an enum to represent "durable" or "transient"
-	handler func(T),
+	handler func(T) AckType,
 ) error {
 	ch, q, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
 	if err != nil {
@@ -73,9 +83,23 @@ func SubscribeJSON[T any](
 			if err := json.Unmarshal(item.Body, &m); err != nil {
 				fmt.Printf("failed unmarshal: %+v\n", err)
 			}
-			handler(m)
-			if err := item.Ack(false); err != nil {
-				fmt.Printf("failed message ack: %+v\n", err)
+			ack := handler(m)
+			switch ack {
+			case Ack:
+				if err := item.Ack(false); err != nil {
+					fmt.Printf("failed message ack: %+v\n", err)
+				}
+				fmt.Printf("acknowledged message\n")
+			case NackReque:
+				if err := item.Nack(false, true); err != nil {
+					fmt.Printf("failed message nack-reque: %+v\n", err)
+				}
+				fmt.Printf("N acknowledged message with reque\n")
+			case NackDiscard:
+				if err := item.Nack(false, false); err != nil {
+					fmt.Printf("failed message nack-discard: %+v\n", err)
+				}
+				fmt.Printf("N acknowledged message with discard\n")
 			}
 		}
 	}()

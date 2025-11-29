@@ -26,12 +26,17 @@ func main() {
 		panic(fmt.Errorf("calling clientWelcome: %w", err))
 	}
 
-	_, _, err = pubsub.DeclareAndBind(conn, routing.ExchangePerilDirect, fmt.Sprintf("%s.%s", routing.PauseKey, username), routing.PauseKey, pubsub.Transient)
+	ch, _, err := pubsub.DeclareAndBind(conn, routing.ExchangePerilDirect, fmt.Sprintf("%s.%s", routing.PauseKey, username), routing.PauseKey, pubsub.Transient)
 	if err != nil {
 		panic(fmt.Errorf("declaring & binding queue: %w", err))
 	}
 
 	gamestate := gamelogic.NewGameState(username)
+
+	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, fmt.Sprintf("%s.%s", "army_moves", username), "army_moves.*", pubsub.Transient, handlerArmyMove(gamestate))
+	if err != nil {
+		panic(fmt.Errorf("subscribing army-move-handler: %w", err))
+	}
 
 	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilDirect, fmt.Sprintf("%s.%s", routing.PauseKey, username), routing.PauseKey, pubsub.Transient, handlerPause(gamestate))
 	if err != nil {
@@ -52,7 +57,12 @@ inf:
 				continue
 			}
 		case "move":
-			_, err := gamestate.CommandMove(words)
+			mv, err := gamestate.CommandMove(words)
+			if err != nil {
+				fmt.Printf("%s\n", err.Error())
+				continue
+			}
+			err = pubsub.PublishJSON(ch, routing.ExchangePerilTopic, fmt.Sprintf("army_moves.%s", username), mv)
 			if err != nil {
 				fmt.Printf("%s\n", err.Error())
 				continue

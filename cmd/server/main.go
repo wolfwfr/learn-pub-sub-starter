@@ -29,9 +29,14 @@ func main() {
 		IsPaused: true,
 	})
 
-	_, _, err = pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, "game_logs", "game_logs.", pubsub.Durable)
+	// _, _, err = pubsub.DeclareAndBind(conn, routing.ExchangePerilTopic, "game_logs", "game_logs.*", pubsub.Durable)
+	// if err != nil {
+	// 	panic(fmt.Errorf("declaring & binding game_logs queue: %w", err))
+	// }
+
+	pubsub.SubscribeGob(conn, routing.ExchangePerilTopic, routing.GameLogSlug, fmt.Sprintf("%s.*", routing.GameLogSlug), pubsub.Durable, handlerLogs())
 	if err != nil {
-		panic(fmt.Errorf("declaring & binding game_logs queue: %w", err))
+		panic(fmt.Errorf("subscribing game_logs queue: %w", err))
 	}
 
 	gamelogic.PrintServerHelp()

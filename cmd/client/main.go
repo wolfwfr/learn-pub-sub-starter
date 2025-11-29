@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"strconv"
+	"time"
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
@@ -33,11 +35,19 @@ func main() {
 
 	gamestate := gamelogic.NewGameState(username)
 
-	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, fmt.Sprintf("%s.%s", "army_moves", username), "army_moves.*", pubsub.Transient, handlerArmyMove(gamestate))
+	// sub to moves
+	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, fmt.Sprintf("%s.%s", "army_moves", username), "army_moves.*", pubsub.Transient, handlerArmyMove(gamestate, ch))
 	if err != nil {
 		panic(fmt.Errorf("subscribing army-move-handler: %w", err))
 	}
 
+	// sub to war
+	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilTopic, "war", fmt.Sprintf("%s.%s", routing.WarRecognitionsPrefix, username), pubsub.Durable, handlerWar(gamestate, ch))
+	if err != nil {
+		panic(fmt.Errorf("subscribing war-handler: %w", err))
+	}
+
+	// sub to pause
 	err = pubsub.SubscribeJSON(conn, routing.ExchangePerilDirect, fmt.Sprintf("%s.%s", routing.PauseKey, username), routing.PauseKey, pubsub.Transient, handlerPause(gamestate))
 	if err != nil {
 		panic(fmt.Errorf("subscribing pause-handler: %w", err))
@@ -62,6 +72,7 @@ inf:
 				fmt.Printf("%s\n", err.Error())
 				continue
 			}
+
 			err = pubsub.PublishJSON(ch, routing.ExchangePerilTopic, fmt.Sprintf("army_moves.%s", username), mv)
 			if err != nil {
 				fmt.Printf("%s\n", err.Error())
@@ -73,7 +84,30 @@ inf:
 		case "help":
 			gamelogic.PrintClientHelp()
 		case "spam":
-			fmt.Printf("Spamming not allowed yet!\n")
+			if len(words) < 2 {
+				fmt.Printf("int argument missing\n")
+				continue
+			}
+
+			numS := words[1]
+			num, err := strconv.Atoi(numS)
+			if err != nil {
+				fmt.Printf("argument must be of type int\n")
+				continue
+			}
+			for range num {
+				log := gamelogic.GetMaliciousLog()
+				err := PublishGameLog(ch, routing.GameLog{
+					CurrentTime: time.Now(),
+					Message:     log,
+					Username:    username,
+				})
+				if err != nil {
+					fmt.Printf("failure publishing spam log: %+v\n", err)
+					continue
+				}
+			}
+
 		case "quit":
 			gamelogic.PrintQuit()
 			break inf

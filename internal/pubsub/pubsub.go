@@ -1,7 +1,9 @@
 package pubsub
 
 import (
+	"bytes"
 	"context"
+	"encoding/gob"
 	"encoding/json"
 	"fmt"
 
@@ -81,6 +83,69 @@ func SubscribeJSON[T any](
 		for item := range c {
 			var m T
 			if err := json.Unmarshal(item.Body, &m); err != nil {
+				fmt.Printf("failed unmarshal: %+v\n", err)
+			}
+			ack := handler(m)
+			switch ack {
+			case Ack:
+				if err := item.Ack(false); err != nil {
+					fmt.Printf("failed message ack: %+v\n", err)
+				}
+				fmt.Printf("acknowledged message\n")
+			case NackReque:
+				if err := item.Nack(false, true); err != nil {
+					fmt.Printf("failed message nack-reque: %+v\n", err)
+				}
+				fmt.Printf("N acknowledged message with reque\n")
+			case NackDiscard:
+				if err := item.Nack(false, false); err != nil {
+					fmt.Printf("failed message nack-discard: %+v\n", err)
+				}
+				fmt.Printf("N acknowledged message with discard\n")
+			}
+		}
+	}()
+	return nil
+}
+
+func PublishGob[T any](ch *amqp.Channel, exchange, key string, val T) error {
+	buf := bytes.NewBuffer([]byte{})
+	err := gob.NewEncoder(buf).Encode(&val)
+	// bytes, err := json.Marshal(&val)
+	if err != nil {
+		return fmt.Errorf("marshalling val: %w", err)
+	}
+	err = ch.PublishWithContext(context.Background(), exchange, key, false, false, amqp.Publishing{
+		ContentType: "application/gob",
+		Body:        buf.Bytes(),
+	})
+	if err != nil {
+		return fmt.Errorf("publishing: %w", err)
+	}
+	return nil
+}
+
+func SubscribeGob[T any](
+	conn *amqp.Connection,
+	exchange,
+	queueName,
+	key string,
+	queueType SimpleQueueType, // an enum to represent "durable" or "transient"
+	handler func(T) AckType,
+) error {
+	ch, q, err := DeclareAndBind(conn, exchange, queueName, key, queueType)
+	if err != nil {
+		return fmt.Errorf("declaring & binding queue: %w", err)
+	}
+	ch.Qos(10, 0, true)
+	c, err := ch.Consume(q.Name, "", false, false, false, false, nil)
+	if err != nil {
+		return fmt.Errorf("creating consumer: %w", err)
+	}
+	go func() {
+		for item := range c {
+			var m T
+			if err := gob.NewDecoder(bytes.NewBuffer(item.Body)).Decode(&m); err != nil {
 				fmt.Printf("failed unmarshal: %+v\n", err)
 			}
 			ack := handler(m)
